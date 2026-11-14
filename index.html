@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>数形 · 函数画板</title>
+<meta name="description" content="面向高中数学的交互函数画板：作图、参数调节、特征点、导数与切线、圆锥曲线，可离线使用。">
+<meta name="theme-color" content="#f3efe6">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="motion.css">
+<script>try{if(JSON.parse(localStorage.getItem('shuxing.v1')||'{}').theme==='dark')document.documentElement.dataset.theme='dark'}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./" aria-label="数形首页">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 36 36" width="34" height="34">
+        <rect x="1.2" y="1.2" width="33.6" height="33.6" rx="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M7 18h22M18 7v22" stroke="currentColor" stroke-width="1.35" opacity=".7"/>
+        <path d="M7 18c4-10 7 10 14 2 3-3.2 5-3.6 8-2.2" fill="none" stroke="#c44b32" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span><b>数形</b><small>函数画板</small></span>
+  </a>
+  <nav class="modes" id="modes" aria-label="作图类型">
+    <button type="button" data-m="explicit" class="on">函数</button>
+    <button type="button" data-m="implicit">方程</button>
+    <button type="button" data-m="param">参数</button>
+    <button type="button" data-m="polar">极坐标</button>
+  </nav>
+  <div class="top-acts">
+    <button type="button" class="ib" id="btnGallery" aria-label="打开函数图库">图库</button>
+    <button type="button" class="ib" id="btnShare" aria-label="复制分享链接">分享</button>
+    <button type="button" class="ib" id="btnExport" aria-label="导出图片">导出</button>
+    <button type="button" class="ib ico" id="btnTheme" aria-label="切换明暗">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z" fill="currentColor"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="stage">
+  <aside class="side" id="side">
+    <button type="button" class="side-handle" id="sheetTog" aria-expanded="false" aria-controls="side">表达式</button>
+    <form class="composer" id="composer" autocomplete="off">
+      <label class="sr" for="exprIn">输入表达式</label>
+      <div class="fin" id="fin">
+        <span class="pre" id="exprPre">y =</span>
+        <input id="exprIn" name="expr" spellcheck="false" placeholder="例如 sin(x)">
+        <button type="submit" class="add" aria-label="添加到画板">添加</button>
+      </div>
+      <div class="param-in" id="paramIn" hidden>
+        <label>x(t) = <input id="xin" spellcheck="false" placeholder="cos(t)"></label>
+        <label>y(t) = <input id="yin" spellcheck="false" placeholder="sin(t)"></label>
+      </div>
+      <div class="chips" id="chips" aria-label="插入符号"></div>
+    </form>
+    <div class="elist" id="elist"></div>
+    <div class="sliders" id="sliders"></div>
+    <div class="info" id="info"></div>
+  </aside>
+
+  <section class="board" id="board">
+    <canvas id="cv" aria-label="函数图像"></canvas>
+    <div class="hud" id="hud"></div>
+    <div class="tools" id="tools"></div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="gallery" id="gallery" hidden>
+  <header>
+    <h2>函数图库</h2>
+    <button type="button" class="ib ico" id="galClose" aria-label="关闭图库">×</button>
+  </header>
+  <div class="gal-body" id="galBody"></div>
+</aside>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="motion.js"></script>
+<script src="math.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
