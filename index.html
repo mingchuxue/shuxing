@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>数形 · 函数画板</title>
-<meta name="description" content="面向高中数学的交互函数画板：作图、参数调节、特征点、导数与切线、圆锥曲线，可离线使用。">
+<meta name="description" content="面向高中数学的交互函数画板：作图、分段函数、不等式区域、定积分、特征点、导数与切线、圆锥曲线，可离线使用。">
 <meta name="theme-color" content="#f3efe6">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
@@ -48,7 +48,7 @@
       <label class="sr" for="exprIn">输入表达式</label>
       <div class="fin" id="fin">
         <span class="pre" id="exprPre">y =</span>
-        <input id="exprIn" name="expr" spellcheck="false" placeholder="例如 sin(x)">
+        <input id="exprIn" name="expr" spellcheck="false" placeholder="sin(x) 或 {x^2, x<0; 2x, x>=0}">
         <button type="submit" class="add" aria-label="添加到画板">添加</button>
       </div>
       <div class="param-in" id="paramIn" hidden>

@@ -43,7 +43,9 @@
     ]},
     { g: "分段与其他", items: [
       { n: "绝对值", e: "abs(x)", d: "在原点处不可导，图像是一条折线。", v: [-6, 6] },
-      { n: "分段函数", e: "x<0?-x:x^2", d: "用问号表达式书写：条件 ? 左侧 : 右侧。", v: [-4, 4] },
+      { n: "分段函数", e: "{x^2, x<0; 2x, x>=0}", d: "课本写法：大括号里写「解析式，条件」，各段用分号隔开。", v: [-4, 4], deriv: true },
+      { n: "单位圆盘", e: "x^2+y^2<1", d: "不等式围出的区域会以浅色标出，并画出边界。", aspect: true },
+      { n: "抛物线上方", e: "y>x^2", d: "把满足 y>x² 的平面区域涂上浅色。", v: [-4, 4] },
       { n: "绝对值求和", e: "abs(x-2)+abs(x+1)", d: "图像是折线，最低段对应各零点之间的区间。", v: [-6, 6] },
       { n: "三次函数", e: "x^3-3x", d: "在 x=±1 处取极值，适合观察导数与切线。", v: [-4, 4], deriv: true },
       { n: "根式函数", e: "sqrt(x)", d: "定义域 x≥0，过原点且在原点处切线竖直。", v: [-2, 8] }
@@ -75,6 +77,9 @@
     grid: true,
     marks: true,
     deriv: false,
+    integ: false,
+    intA: 0,
+    intB: 1,
     tanX: 1,
     theme: "light",
     trace: null,
@@ -109,7 +114,7 @@
 
   function compileExpr(item, presetP) {
     item.error = "";
-    item.fn = null; item.Fx = null; item.xt = null; item.yt = null; item.conic = null;
+    item.fn = null; item.Fx = null; item.xt = null; item.yt = null; item.conic = null; item.holds = null; item.ineqOp = null;
     try {
       if (item.kind === "param") {
         item.nodeX = SX.parse(item.srcx);
@@ -133,14 +138,35 @@
         try { item.conic = SX.analyzeConic(substParams(node, paramVals(item))); } catch (e) { item.conic = null; }
       } else {
         var raw = String(item.src).replace(/^\s*y\s*=\s*/i, "");
-        item.node = SX.parse(raw);
-        if (item.node.k === "eq" || SX.usesVar(item.node, "y")) {
-          item.kind = "implicit";
+        var det = SX.detectKind(item.src);
+        if (det.kind === "error") throw new Error(det.error);
+        if (det.kind === "ineq") {
+          item.kind = "ineq";
+          item.node = det.node;
+          item.ineqOp = det.op;
+          item.ineqStyle = det.style;
+          item.params = mergeParams(item.params, SX.paramsOf(det.node, reservedFor("implicit")), presetP);
+          if (det.style === "y") {
+            item.rhs = det.rhs;
+            item.fn = function (x) { return SX.eval(item.rhs, Object.assign({ x: x }, paramVals(item))); };
+          }
+          item.holds = function (x, y) { return !!SX.eval(item.node, Object.assign({ x: x, y: y }, paramVals(item))); };
+          item.Fx = function (x, y) {
+            var n = item.node;
+            return SX.eval(n.a, Object.assign({ x: x, y: y }, paramVals(item))) - SX.eval(n.b, Object.assign({ x: x, y: y }, paramVals(item)));
+          };
+          return item;
+        }
+        if (det.kind === "implicit" || det.kind === "param" || det.kind === "polar") {
+          item.kind = det.kind;
+          if (det.kind === "param") { item.srcx = det.rawx; item.srcy = det.rawy; }
+          if (det.kind === "polar" || det.kind === "implicit") item.src = det.raw || raw;
           return compileExpr(item, presetP);
         }
+        item.node = det.node || SX.parse(raw);
         item.params = mergeParams(item.params, SX.paramsOf(item.node, reservedFor("explicit")), presetP);
         item.fn = function (x) { return SX.eval(item.node, Object.assign({ x: x }, paramVals(item))); };
-        item.src = raw;
+        item.src = det.raw || raw;
       }
     } catch (err) {
       item.error = err.message || "无法解析";
@@ -155,6 +181,7 @@
       if (n.k === "un") return { k: "un", op: n.op, a: copy(n.a) };
       if (n.k === "tern") return { k: "tern", c: copy(n.c), a: copy(n.a), b: copy(n.b) };
       if (n.k === "call") return { k: "call", n: n.n, args: n.args.map(copy) };
+      if (n.k === "piece") return { k: "piece", parts: n.parts.map(function (p) { return { expr: copy(p.expr), cond: p.cond ? copy(p.cond) : null }; }) };
       return n;
     }
     return copy(node);
@@ -253,6 +280,7 @@
       if (!e.on || e.error) return;
       drawItem(e, hexColor(e.color), i === S.sel);
     });
+    if (S.integ) drawIntegral();
     if (S.marks) drawMarks(C);
     if (S.deriv) drawTangent(C);
     if (S.trace) drawTrace(C);
@@ -391,7 +419,87 @@
         pts3.push({ x: r * Math.cos(th), y: r * Math.sin(th) });
       }
       strokePath(pts3, ySpan, color, w);
+    } else if (item.kind === "ineq") {
+      drawIneq(item, color, w, ySpan);
     }
+  }
+
+  function drawIneq(item, color, w, ySpan) {
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = color;
+    if (item.ineqStyle === "y" && item.fn) {
+      var op = item.ineqOp || ">";
+      for (var i = 0; i < W; i++) {
+        var x = Wx(i + 0.5), yb = item.fn(x);
+        if (!SX.finite(yb)) continue;
+        var yLo, yHi;
+        if (op === ">" || op === ">=") { yLo = yb; yHi = S.view.ymax; }
+        else { yLo = S.view.ymin; yHi = yb; }
+        var top = Math.min(Y(yLo), Y(yHi)), bot = Math.max(Y(yLo), Y(yHi));
+        if (bot > top) ctx.fillRect(i, top, 1.2, bot - top);
+      }
+      ctx.globalAlpha = 1;
+      var n = Math.min(2200, Math.max(500, Math.round(W * 2)));
+      strokePath(SX.sampleFn(item.fn, S.view.xmin, S.view.xmax, n), ySpan, color, w);
+    } else if (item.holds) {
+      var nx = Math.max(80, Math.round(W / 4)), ny = Math.max(60, Math.round(H / 4));
+      var dw = W / nx, dh = H / ny;
+      for (var j = 0; j < ny; j++) {
+        for (var i = 0; i < nx; i++) {
+          var x = Wx((i + 0.5) * dw), y = Wy((j + 0.5) * dh);
+          if (item.holds(x, y)) ctx.fillRect(i * dw, j * dh, dw + 0.4, dh + 0.4);
+        }
+      }
+      ctx.globalAlpha = 1;
+      if (item.Fx) {
+        var segs = SX.sampleImplicit(item.Fx, S.view.xmin, S.view.xmax, S.view.ymin, S.view.ymax, Math.round(W / 3.2), Math.round(H / 3.2));
+        ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineJoin = "round"; ctx.lineCap = "round";
+        ctx.beginPath();
+        for (var i = 0; i < segs.length; i += 2) {
+          ctx.moveTo(X(segs[i][0]), Y(segs[i][1]));
+          ctx.lineTo(X(segs[i + 1][0]), Y(segs[i + 1][1]));
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawIntegral() {
+    var e = selectedExplicit();
+    if (!e) return;
+    var a = S.intA, b = S.intB;
+    if (a === b) return;
+    var lo = Math.min(a, b), hi = Math.max(a, b);
+    lo = Math.max(lo, S.view.xmin); hi = Math.min(hi, S.view.xmax);
+    if (hi <= lo) return;
+    var n = Math.max(40, Math.round((hi - lo) / (S.view.xmax - S.view.xmin) * W * 2));
+    var pts = SX.sampleFn(e.fn, lo, hi, n);
+    var color = hexColor(e.color);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(X(lo), Y(0));
+    for (var i = 0; i < pts.length; i++) {
+      if (SX.finite(pts[i].y)) ctx.lineTo(X(pts[i].x), Y(pts[i].y));
+    }
+    ctx.lineTo(X(hi), Y(0));
+    ctx.closePath();
+    ctx.globalAlpha = 0.22; ctx.fillStyle = color; ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(X(S.intA), 0); ctx.lineTo(X(S.intA), H);
+    ctx.moveTo(X(S.intB), 0); ctx.lineTo(X(S.intB), H); ctx.stroke();
+    ctx.setLineDash([]);
+    function handle(x, tag) {
+      var sx = X(x), sy = Math.min(Math.max(Y(0), 14), H - 14);
+      ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * PI); ctx.fillStyle = color; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = css("var(--paper)"); ctx.stroke();
+      ctx.font = "11px " + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = css("var(--ink)"); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(tag, sx, sy - 8);
+    }
+    handle(S.intA, "a"); handle(S.intB, "b");
+    ctx.restore();
   }
 
   function drawConicDecor(c, color) {
@@ -497,22 +605,49 @@
     if (!e) return;
     var x0 = S.tanX;
     if (x0 < S.view.xmin || x0 > S.view.xmax) x0 = (S.view.xmin + S.view.xmax) / 2;
-    var y0 = e.fn(x0), k = SX.d1(e.fn, x0);
-    if (!SX.finite(y0) || !SX.finite(k) || Math.abs(k) > 1e6) return;
-    S._tan = { x: x0, y: y0, k: k, e: e };
+    var cusps = SX.findCusps(e.fn, S.view.xmin, S.view.xmax, 220);
+    var snap = null, best = Infinity, pxTol = (S.view.xmax - S.view.xmin) / W * 14;
+    for (var i = 0; i < cusps.length; i++) {
+      var d = Math.abs(cusps[i] - x0);
+      if (d < best && d < pxTol) { best = d; snap = cusps[i]; }
+    }
+    if (snap != null) x0 = snap;
+    var y0 = e.fn(x0), d = SX.derivAt(e.fn, x0);
+    if (!SX.finite(y0)) { S._tan = null; return; }
     var color = hexColor(e.color);
+    S._tan = { x: x0, y: y0, k: d.k, e: e, smooth: d.smooth, vertical: d.vertical, left: d.left, right: d.right };
     ctx.save();
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]); ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    var xs = S.view.xmin, xe = S.view.xmax;
-    ctx.moveTo(X(xs), Y(y0 + k * (xs - x0)));
-    ctx.lineTo(X(xe), Y(y0 + k * (xe - x0)));
-    ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    if (d.smooth && SX.finite(d.k) && Math.abs(d.k) < 1e6) {
+      var k = d.k;
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]); ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(X(S.view.xmin), Y(y0 + k * (S.view.xmin - x0)));
+      ctx.lineTo(X(S.view.xmax), Y(y0 + k * (S.view.xmax - x0)));
+      ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    } else if (!d.smooth && !d.vertical) {
+      ctx.setLineDash([3, 3]); ctx.lineWidth = 1.3; ctx.strokeStyle = color; ctx.globalAlpha = 0.55;
+      function half(k, dir) {
+        if (!SX.finite(k)) return;
+        ctx.beginPath();
+        ctx.moveTo(X(x0), Y(y0));
+        var x1 = x0 + dir * (S.view.xmax - S.view.xmin) * 0.25;
+        ctx.lineTo(X(x1), Y(y0 + k * (x1 - x0)));
+        ctx.stroke();
+      }
+      half(d.left, -1); half(d.right, 1);
+      ctx.globalAlpha = 1; ctx.setLineDash([]);
+    }
     var sx = X(x0), sy = Y(y0);
-    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * PI); ctx.fillStyle = color; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = css("var(--paper)"); ctx.stroke();
-    var text = "k = " + SX.formatNum(k);
+    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * PI);
+    ctx.fillStyle = d.smooth ? color : "transparent";
+    if (d.smooth) ctx.fill();
+    ctx.lineWidth = 2.2; ctx.strokeStyle = d.smooth ? css("var(--paper)") : color; ctx.stroke();
+    if (!d.smooth) { ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * PI); ctx.strokeStyle = color; ctx.stroke(); }
+    var text = d.vertical ? "切线垂直" : (!d.smooth ? "不可导" : ("k = " + SX.formatNum(d.k)));
+    if (!d.smooth && !d.vertical && SX.finite(d.left) && SX.finite(d.right)) {
+      text = "不可导  左 " + SX.formatNum(d.left) + "，右 " + SX.formatNum(d.right);
+    }
     ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
     var tw = ctx.measureText(text).width, lx = sx + 10, ly = sy - 22;
     ctx.fillStyle = css("var(--card)"); ctx.strokeStyle = css("var(--line)"); ctx.lineWidth = 1;
@@ -556,7 +691,7 @@
       var tex;
       if (kind === "param") tex = "x=" + (SX.latexOf(item.srcx) || item.srcx) + ",\\; y=" + (SX.latexOf(item.srcy) || item.srcy);
       else if (kind === "polar") tex = "r=" + (SX.latexOf(String(item.src).replace(/^\s*r\s*=\s*/i, "")) || item.src);
-      else if (kind === "implicit") tex = SX.latexOf(item.src) || item.src;
+      else if (kind === "implicit" || kind === "ineq") tex = SX.latexOf(item.src) || item.src;
       else tex = "y=" + (SX.latexOf(item.src) || item.src);
       return katex.renderToString(tex, { throwOnError: false, displayMode: false });
     } catch (e) { return escapeH(item.src || src); }
@@ -606,12 +741,40 @@
     var e = S.exprs[S.sel];
     if (!e || e.error) { el.hidden = true; el.innerHTML = ""; return; }
     var rows = [];
-    if (e.kind === "explicit" && e.fn && S._marks) {
-      var zs = S._marks.zeros.filter(function (p) { return p.e === e; });
-      var ex = S._marks.extrema.filter(function (p) { return p.e === e; });
-      if (zs.length) rows.push(["零点", zs.map(function (p) { return SX.formatNum(p.x); }).join("，")]);
-      ex.forEach(function (p) { rows.push([p.kind === "max" ? "极大值" : "极小值", "(" + SX.formatNum(p.x) + ", " + SX.formatNum(p.y) + ")"]); });
-      if (S.deriv && S._tan && S._tan.e === e) rows.push(["切线斜率", SX.formatNum(S._tan.k)]);
+    if ((e.kind === "explicit" || (e.kind === "ineq" && e.fn)) && e.fn) {
+      if (S._marks && e.kind === "explicit") {
+        var zs = S._marks.zeros.filter(function (p) { return p.e === e; });
+        var ex = S._marks.extrema.filter(function (p) { return p.e === e; });
+        if (zs.length) rows.push(["零点", zs.map(function (p) { return SX.formatNum(p.x); }).join("，")]);
+        ex.forEach(function (p) { rows.push([p.kind === "max" ? "极大值" : "极小值", "(" + SX.formatNum(p.x) + ", " + SX.formatNum(p.y) + ")"]); });
+      }
+      if (S.deriv && S._tan && S._tan.e === e) {
+        if (!S._tan.smooth) {
+          var msg = S._tan.vertical ? "此处切线垂直或一侧无定义" : "不可导";
+          if (!S._tan.vertical && SX.finite(S._tan.left) && SX.finite(S._tan.right)) {
+            msg = "不可导（左 " + SX.formatNum(S._tan.left) + "，右 " + SX.formatNum(S._tan.right) + "）";
+          }
+          rows.push(["切线", msg]);
+        } else rows.push(["切线斜率", SX.formatNum(S._tan.k)]);
+      }
+      try {
+        var pr = SX.analyzeProps(e.fn, e.node || e.rhs, S.view.xmin, S.view.xmax);
+        rows.push(["奇偶性", pr.parity]);
+        rows.push(["周期", pr.period != null ? SX.formatNum(pr.period) : "不是周期函数"]);
+        if (pr.hints.length) rows.push(["定义域", pr.hints.join("；")]);
+        if (pr.segs.length && pr.segs.length < 8) {
+          rows.push(["窗口内有定义", pr.segs.map(function (s) { return SX.formatNum(s[0]) + " ~ " + SX.formatNum(s[1]); }).join("，")]);
+        }
+        if (pr.mono && pr.mono.length && pr.mono.length <= 8) {
+          var md = { "增": "递增", "减": "递减", "常": "为常数" };
+          rows.push(["单调区间", pr.mono.map(function (m) { return "(" + SX.formatNum(m.a) + ", " + SX.formatNum(m.b) + ") " + (md[m.dir] || m.dir); }).join("；")]);
+        }
+      } catch (err) {}
+      if (S.integ && e.kind === "explicit") {
+        var I = SX.integrate(e.fn, S.intA, S.intB, 640);
+        rows.push(["定积分 ∫[" + SX.formatNum(S.intA) + "," + SX.formatNum(S.intB) + "]", SX.formatNum(I.value)]);
+        rows.push(["面积（绝对值）", SX.formatNum(I.abs)]);
+      }
     }
     if (e.conic && e.conic.type && e.conic.type !== "degenerate") {
       var c = e.conic;
@@ -629,13 +792,38 @@
     }
     if (!rows.length) { el.hidden = true; el.innerHTML = ""; return; }
     el.hidden = false;
-    el.innerHTML = "<h3>特征</h3>" + rows.map(function (r) { return '<div class="row"><span>' + r[0] + "</span><b>" + escapeH(r[1]) + "</b></div>"; }).join("");
+    var html = "<h3>特征</h3>" + rows.map(function (r) { return '<div class="row"><span>' + r[0] + "</span><b>" + escapeH(r[1]) + "</b></div>"; }).join("");
+    if (e.fn && e.kind === "explicit") {
+      var ticks = niceTicks(S.view.xmin, S.view.xmax, S.pi, 6).ticks.filter(function (x, i, a) { return i === 0 || i === a.length - 1 || i % Math.max(1, Math.round(a.length / 6)) === 0; }).slice(0, 7);
+      if (ticks.length) {
+        var tab = SX.valueTable(e.fn, ticks);
+        html += "<h3>取值</h3><table class=\"vtab\"><tr><th>x</th>" + tab.map(function (r) { return "<th>" + escapeH(SX.formatNum(r.x)) + "</th>"; }).join("") + "</tr><tr><td>y</td>" + tab.map(function (r) { return "<td>" + escapeH(SX.formatNum(r.y)) + "</td>"; }).join("") + "</tr></table>";
+      }
+      if (S.integ) {
+        html += '<div class="intedit">积分区间 <input id="inta" type="text" value="' + escapeH(SX.formatNum(S.intA)) + '"> 到 <input id="intb" type="text" value="' + escapeH(SX.formatNum(S.intB)) + '"></div>';
+      }
+    }
+    el.innerHTML = html;
+    if (S.integ && e.fn) {
+      function readBound(id, def) {
+        var v = SX.eval(SX.parse($("#"+id).value || "0"), {});
+        return SX.finite(v) ? v : def;
+      }
+      ["inta","intb"].forEach(function (id) {
+        var inp = $("#"+id); if (!inp) return;
+        inp.addEventListener("change", function () {
+          if (id === "inta") S.intA = readBound("inta", S.intA); else S.intB = readBound("intb", S.intB);
+          draw(); renderInfo(); persist();
+        });
+        inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") ev.target.blur(); });
+      });
+    }
   }
 
   function renderTools() {
     var items = [
       ["reset", "复位", false], ["fit", "适应", false], ["aspect", "等比例", S.aspect],
-      ["pi", "π 刻度", S.pi], ["grid", "网格", S.grid], ["marks", "标注", S.marks], ["deriv", "导数", S.deriv]
+      ["pi", "π 刻度", S.pi], ["grid", "网格", S.grid], ["marks", "标注", S.marks], ["deriv", "导数", S.deriv], ["integ", "积分", S.integ]
     ];
     $("#tools").innerHTML = items.map(function (it) {
       return '<button type="button" data-t="' + it[0] + '" class="' + (it[2] ? "on" : "") + '">' + it[1] + "</button>";
@@ -661,7 +849,7 @@
     $("#paramIn").hidden = !param;
     $("#fin").style.display = param ? "none" : "flex";
     $("#exprPre").textContent = m === "polar" ? "r =" : m === "implicit" ? "" : "y =";
-    var ph = { explicit: "例如 sin(x)", implicit: "x^2/4+y^2/9=1", polar: "2*cos(θ)", param: "" };
+    var ph = { explicit: "sin(x) 或 {x^2, x<0; 2x, x>=0}", implicit: "x^2/4+y^2/9=1", polar: "2*cos(θ)", param: "" };
     $("#exprIn").placeholder = ph[m] || "";
     if (window.Motion) Motion.refresh();
   }
@@ -684,7 +872,7 @@
         return { k: e.kind, s: e.src, x: e.srcx, y: e.srcy, on: e.on, c: e.color, p: paramVals(e), t: e.trange, r: e.prange };
       }),
       v: [S.view.xmin, S.view.xmax, S.view.ymin, S.view.ymax],
-      o: { a: S.aspect, pi: S.pi, g: S.grid, m: S.marks, d: S.deriv, tx: S.tanX, theme: S.theme, sel: S.sel, mode: S.mode }
+      o: { a: S.aspect, pi: S.pi, g: S.grid, m: S.marks, d: S.deriv, integ: S.integ, ia: S.intA, ib: S.intB, tx: S.tanX, theme: S.theme, sel: S.sel, mode: S.mode }
     };
   }
   function loadSnap(o) {
@@ -702,6 +890,9 @@
     if (opt.g != null) S.grid = !!opt.g;
     if (opt.m != null) S.marks = !!opt.m;
     if (opt.d != null) S.deriv = !!opt.d;
+    if (opt.integ != null) S.integ = !!opt.integ;
+    if (opt.ia != null) S.intA = +opt.ia;
+    if (opt.ib != null) S.intB = +opt.ib;
     if (opt.tx != null) S.tanX = +opt.tx;
     if (opt.theme) setTheme(opt.theme, true);
     if (opt.mode) setMode(opt.mode);
@@ -730,7 +921,7 @@
       if (!s) return;
       var kind = S.mode;
       var det = SX.detectKind(S.mode === "explicit" && !/^\s*y\s*=/i.test(s) ? "y=" + s : s);
-      if (det.kind === "param" || det.kind === "polar" || det.kind === "implicit") kind = det.kind;
+      if (det.kind === "param" || det.kind === "polar" || det.kind === "implicit" || det.kind === "ineq") kind = det.kind;
       if (kind === "param") addExpr({ kind: "param", srcx: det.rawx, srcy: det.rawy });
       else addExpr({ kind: kind, src: det.raw || s });
       $("#exprIn").value = "";
@@ -828,6 +1019,10 @@
     cv.setPointerCapture(e.pointerId);
     var p = onPointer(e);
     pointers.set(e.pointerId, p);
+    if (S.integ) {
+      var da = Math.abs(p.x - X(S.intA)), db = Math.abs(p.x - X(S.intB));
+      if (da < 12 || db < 12) { S.dragging = da <= db ? "inta" : "intb"; return; }
+    }
     if (S.deriv && S._tan) {
       if (Math.hypot(p.x - X(S._tan.x), p.y - Y(S._tan.y)) < 16) {
         S.dragging = "tan"; return;
@@ -845,6 +1040,11 @@
     pointers.set(e.pointerId, p);
     if (S.dragging === "tan") {
       S.tanX = Wx(p.x); draw(); renderInfo(); return;
+    }
+    if (S.dragging === "inta" || S.dragging === "intb") {
+      var x = Wx(p.x);
+      if (S.dragging === "inta") S.intA = x; else S.intB = x;
+      draw(); renderInfo(); return;
     }
     if (S.dragging === "pan" && prev && pointers.size === 1) {
       var dx = Wx(prev.x) - Wx(p.x), dy = Wy(prev.y) - Wy(p.y);
@@ -949,13 +1149,22 @@
     else if (t === "grid") S.grid = !S.grid;
     else if (t === "marks") S.marks = !S.marks;
     else if (t === "deriv") S.deriv = !S.deriv;
+    else if (t === "integ") {
+      S.integ = !S.integ;
+      if (S.integ) {
+        var span = S.view.xmax - S.view.xmin;
+        if (S.intA < S.view.xmin || S.intB > S.view.xmax || S.intA === S.intB) {
+          S.intA = S.view.xmin + span * 0.25; S.intB = S.view.xmin + span * 0.75;
+        }
+      }
+    }
     renderTools(); draw(); renderInfo(); persist();
   });
   $$("#modes button").forEach(function (b) { b.addEventListener("click", function () { setMode(b.dataset.m); }); });
 
   var CHIPS = {
-    explicit: ["sin", "cos", "tan", "ln", "log", "sqrt", "abs", "^", "π", "e"],
-    implicit: ["x^2", "y^2", "^", "/", "π", "="],
+    explicit: ["sin", "cos", "tan", "ln", "log", "sqrt", "abs", "^", "π", "{ }", "e"],
+    implicit: ["x^2", "y^2", "^", "/", "π", "=", "<", ">"],
     param: ["cos(t)", "sin(t)", "t", "π"],
     polar: ["cos(θ)", "sin(θ)", "θ", "π"]
   };
@@ -968,7 +1177,8 @@
     var inp = S.mode === "param" ? ($("#xin") === document.activeElement ? $("#xin") : $("#yin")) : $("#exprIn");
     var start = inp.selectionStart || inp.value.length, v = inp.value;
     var ins = c;
-    if (/^[a-z]+$/i.test(c) && c.length > 1 && c !== "pi") ins = c + "()";
+    if (c === "{ }") ins = "{ , ; }";
+    else if (/^[a-z]+$/i.test(c) && c.length > 1 && c !== "pi") ins = c + "()";
     inp.value = v.slice(0, start) + ins + v.slice(inp.selectionEnd || start);
     inp.focus();
     var pos = start + (ins.endsWith("()") ? ins.length - 1 : ins.length);
@@ -1075,7 +1285,6 @@
     setMode("explicit");
     renderChips();
     renderGallery();
-    renderTools();
     var loaded = false;
     if (location.hash && location.hash.indexOf("#s=") === 0) {
       try { loaded = loadSnap(JSON.parse(decodeURIComponent(location.hash.slice(3)))); } catch (e) { loaded = false; }
@@ -1094,8 +1303,10 @@
     } catch (e) {}
     if (document.documentElement.dataset.theme === "dark") savedTheme = "dark";
     setTheme(savedTheme, true);
+    renderTools();
     renderList();
     resize();
+    renderInfo();
     if (window.Motion) {
       Motion.pills([{ sel: "#modes" }, { sel: "#tools", keep: true }]);
       Motion.enter($(".stage"));

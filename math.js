@@ -41,7 +41,7 @@
   function isIdentPart(c) { return isLetter(c) || isDigit(c); }
 
   function tokenize(src) {
-    var s = String(src).replace(/π/g, "π").replace(/[−–—]/g, "-").replace(/[×⋅·]/g, "*").replace(/÷/g, "/").replace(/≤/g, "<=").replace(/≥/g, ">=").replace(/≠/g, "!=");
+    var s = String(src).replace(/π/g, "π").replace(/[−–—]/g, "-").replace(/[×⋅·]/g, "*").replace(/÷/g, "/").replace(/≤/g, "<=").replace(/≥/g, ">=").replace(/≠/g, "!=").replace(/，/g, ",").replace(/；/g, ";");
     s = s.replace(/√\s*/g, "sqrt");
     var i = 0, n = s.length, out = [];
     while (i < n) {
@@ -70,6 +70,7 @@
         if (low === "pi") name = "π";
         else if (low === "theta") name = "θ";
         else if (low === "tau") name = "τ";
+        else if (low === "if") { out.push({ t: "kw", v: "if" }); name = null; }
         else if (FN_NAMES[low]) out.push({ t: "fn", v: low }), name = null;
         if (name !== null) out.push({ t: "ident", v: name });
         continue;
@@ -82,7 +83,7 @@
       if (c === "&" && s[i + 1] === "&") { out.push({ t: "op", v: "&&" }); i += 2; continue; }
       if (c === "|" && s[i + 1] === "|") { out.push({ t: "op", v: "||" }); i += 2; continue; }
       if (c === "|") { out.push({ t: "bar" }); i++; continue; }
-      if ("+-*/^=(),?:<>".indexOf(c) >= 0) { out.push({ t: "op", v: c }); i++; continue; }
+      if ("+-*/^=(),?:<>{};".indexOf(c) >= 0) { out.push({ t: "op", v: c }); i++; continue; }
       throw new Error("无法识别的符号「" + c + "」");
     }
     return out;
@@ -249,6 +250,7 @@
       this.i++;
       return { k: "call", n: "abs", args: [a] };
     }
+    if (p.t === "op" && p.v === "{") return this.parsePiece();
     throw new Error("此处语法不正确");
   };
   Parser.prototype.parseCall = function () {
@@ -279,6 +281,39 @@
   Parser.prototype.parseFnArg = function () {
     return this.parseMul();
   };
+  function isCond(n) {
+    return !!(n && n.k === "op" && /^(<|>|<=|>=|==|!=|&&|\|\|)$/.test(n.op));
+  }
+  Parser.prototype.parsePiecePart = function () {
+    var start = this.parseTern();
+    var nx = this.peek();
+    if (this.peekv() === ":" && isCond(start)) {
+      this.i++;
+      return { expr: this.parseTern(), cond: start };
+    }
+    if (nx && nx.t === "kw" && nx.v === "if") {
+      this.i++;
+      return { expr: start, cond: this.parseTern() };
+    }
+    if (this.peekv() === ",") {
+      this.i++;
+      return { expr: start, cond: this.parseTern() };
+    }
+    return { expr: start, cond: null };
+  };
+  Parser.prototype.parsePiece = function () {
+    this.eat("{");
+    var parts = [];
+    if (this.peekv() === "}") throw new Error("分段函数不能为空");
+    while (!this.done() && this.peekv() !== "}") {
+      parts.push(this.parsePiecePart());
+      if (this.peekv() === ";") this.i++;
+      else break;
+    }
+    this.eat("}");
+    if (!parts.length) throw new Error("分段函数不能为空");
+    return { k: "piece", parts: parts };
+  };
 
   function parse(src) {
     var toks = insertMul(classifyBars(tokenize(src)));
@@ -291,6 +326,7 @@
     else if (node.k === "un") walk(node.a, fn);
     else if (node.k === "tern") { walk(node.c, fn); walk(node.a, fn); walk(node.b, fn); }
     else if (node.k === "call") node.args.forEach(function (a) { walk(a, fn); });
+    else if (node.k === "piece") node.parts.forEach(function (p) { walk(p.expr, fn); if (p.cond) walk(p.cond, fn); });
   }
 
   function paramsOf(node, reserved) {
@@ -349,6 +385,13 @@
       }
       case "eq": return evalNode(node.a, vars) - evalNode(node.b, vars);
       case "tern": return evalNode(node.c, vars) ? evalNode(node.a, vars) : evalNode(node.b, vars);
+      case "piece": {
+        for (var i = 0; i < node.parts.length; i++) {
+          var p = node.parts[i];
+          if (!p.cond || evalNode(p.cond, vars)) return evalNode(p.expr, vars);
+        }
+        return NaN;
+      }
       case "call": {
         var fn = FNS[node.n];
         if (!fn) return NaN;
@@ -437,7 +480,8 @@
         if (z != null) zs.push(z);
       }
     }
-    return uniqueSorted(zs, (xmax - xmin) * 1e-6);
+    var span = xmax - xmin;
+    return uniqueSorted(zs.map(function (x) { return snapNice(x, span); }), Math.max(span * 1e-6, 3e-4));
   }
 
   function uniqueSorted(arr, tol) {
@@ -447,6 +491,13 @@
       if (!out.length || Math.abs(arr[i] - out[out.length - 1]) > tol) out.push(arr[i]);
     }
     return out;
+  }
+  function snapNice(x, span) {
+    if (!finite(x)) return x;
+    if (Math.abs(x) < 3e-4) return 0;
+    var h = Math.round(x * 2) / 2;
+    if (Math.abs(x - h) < 3e-4) return h;
+    return x;
   }
 
   function d1(fn, x) {
@@ -489,6 +540,25 @@
       }
       out.push({ x: x, y: y, kind: kind });
     }
+    var cusps = findCusps(fn, xmin, xmax, 220);
+    var tol = (xmax - xmin) * 3e-3;
+    for (var j = 0; j < cusps.length; j++) {
+      var cx = cusps[j], cy = fn(cx), near = false;
+      if (!finite(cy)) continue;
+      for (var t = 0; t < out.length; t++) if (Math.abs(out[t].x - cx) < tol) { near = true; break; }
+      if (near) continue;
+      var h = Math.max(1e-4, (xmax - xmin) * 1e-5);
+      var yl = fn(cx - h), yr = fn(cx + h), ck = null;
+      if (finite(yl) && finite(yr)) {
+        if (yl > cy && yr > cy) ck = "min";
+        else if (yl < cy && yr < cy) ck = "max";
+      }
+      if (ck) out.push({ x: cx, y: cy, kind: ck });
+    }
+    out.forEach(function (p) {
+      p.x = snapNice(p.x, xmax - xmin);
+      if (finite(p.y)) p.y = snapNice(p.y, ySpan);
+    });
     return out;
   }
 
@@ -830,6 +900,12 @@
     else if (node.k === "un") s = (node.op === "-" ? "-" : "") + toLatex(node.a, 7);
     else if (node.k === "eq") s = toLatex(node.a, 0) + "=" + toLatex(node.b, 0);
     else if (node.k === "tern") s = toLatex(node.c, 1) + "\\, ?\\, " + toLatex(node.a, 1) + "\\, :\\, " + toLatex(node.b, 1);
+    else if (node.k === "piece") {
+      s = "\\begin{cases}" + node.parts.map(function (p) {
+        return toLatex(p.expr, 0) + "&" + (p.cond ? toLatex(p.cond, 0) : "\\text{其他}");
+      }).join("\\\\") + "\\end{cases}";
+      p = 100;
+    }
     else if (node.k === "op" && node.op === "/") {
       s = "\\dfrac{" + toLatex(node.a, 0) + "}{" + toLatex(node.b, 0) + "}";
       p = 100;
@@ -949,12 +1025,19 @@
       if (ym) {
         return { kind: "param", x: parse(ym[2]), y: parse(ym[1]), rawx: ym[2].trim(), rawy: ym[1].trim() };
       }
-      var node2 = parse(s.replace(/^\s*y\s*=\s*/i, ""));
+      var body2 = s.replace(/^\s*y\s*=\s*/i, "");
+      var node2 = parse(body2);
+      if (node2.k === "op" && /^(<|>|<=|>=)$/.test(node2.op)) {
+        function isY(n) { return n && n.k === "var" && n.n === "y"; }
+        var flip = { "<": ">", ">": "<", "<=": ">=", ">=": "<=" };
+        if (isY(node2.a) && !usesVar(node2.b, "y")) return { kind: "ineq", style: "y", op: node2.op, rhs: node2.b, node: node2, raw: s };
+        if (isY(node2.b) && !usesVar(node2.a, "y")) return { kind: "ineq", style: "y", op: flip[node2.op], rhs: node2.a, node: node2, raw: s };
+        return { kind: "ineq", style: "F", op: node2.op, node: node2, raw: s };
+      }
       if (node2.k === "eq" || (usesVar(node2, "y") && usesVar(node2, "x"))) {
         return { kind: "implicit", node: node2, raw: s };
       }
-      var body2 = s.replace(/^\s*y\s*=\s*/i, "");
-      return { kind: "explicit", node: parse(body2), raw: body2 };
+      return { kind: "explicit", node: node2, raw: body2 };
     } catch (e) {
       return { kind: "error", error: e.message };
     }
@@ -963,6 +1046,184 @@
   function splitInput(s) {
     s = String(s).trim();
     return s;
+  }
+
+
+  /* ---------- 单侧导数与不可导点 ---------- */
+  function d1side(fn, x, dir) {
+    var h0 = 1e-5 * (1 + Math.abs(x)), vals = [], hs = [h0, 4 * h0, 16 * h0];
+    var y0 = fn(x);
+    if (!finite(y0)) return NaN;
+    for (var i = 0; i < hs.length; i++) {
+      var y1 = fn(x + dir * hs[i]);
+      if (finite(y1)) vals.push((y1 - y0) / (dir * hs[i]));
+    }
+    if (!vals.length) return NaN;
+    var a = vals[0], b = vals[Math.min(1, vals.length - 1)];
+    if (finite(a) && finite(b) && Math.abs(a - b) > 0.35 * (1 + Math.abs(a) + Math.abs(b))) {
+      if (Math.abs(a) > 50 && Math.abs(b) > 50 && a * b > 0) return a > 0 ? Infinity : -Infinity;
+    }
+    if (vals.length >= 2 && finite(vals[0]) && finite(vals[1]) &&
+        Math.abs(vals[0] - vals[1]) < 0.35 * (1 + Math.abs(vals[0]) + Math.abs(vals[1]))) {
+      var ext = (4 * vals[0] - vals[1]) / 3;
+      if (finite(ext)) return ext;
+    }
+    return a;
+  }
+  function derivAt(fn, x) {
+    var L = d1side(fn, x, -1), R = d1side(fn, x, 1);
+    var mid = d1(fn, x);
+    var both = finite(L) && finite(R);
+    var vert = (finite(L) && Math.abs(L) > 80) || (finite(R) && Math.abs(R) > 80) || L === INF || R === INF || L === -INF || R === -INF;
+    var smooth = both && Math.abs(L - R) <= 0.08 * (1 + Math.abs(L) + Math.abs(R)) + 0.08;
+    if (smooth && !vert) return { k: finite(mid) ? mid : (L + R) / 2, left: L, right: R, smooth: true, vertical: false };
+    if (vert && both && L * R > 0) return { k: NaN, left: L, right: R, smooth: false, vertical: true };
+    if (vert && !both && (Math.abs(L) > 80 || Math.abs(R) > 80 || !isFinite(L) || !isFinite(R))) {
+      return { k: NaN, left: L, right: R, smooth: false, vertical: true, half: !both };
+    }
+    return { k: NaN, left: L, right: R, smooth: false, vertical: false };
+  }
+  function findCusps(fn, xmin, xmax, n) {
+    n = n || 280;
+    var out = [], dx = (xmax - xmin) / n;
+    function consider(x) {
+      if (x < xmin - 1e-12 || x > xmax + 1e-12) return;
+      if (!finite(fn(x))) return;
+      if (!derivAt(fn, x).smooth) out.push(x);
+    }
+    consider(0);
+    for (var i = 0; i <= n; i++) consider(xmin + dx * i);
+    for (var i = 0; i < n; i++) {
+      var x1 = xmin + dx * i, x2 = x1 + dx;
+      var s1 = d1(fn, x1), s2 = d1(fn, x2);
+      if (!finite(s1) || !finite(s2) || !finite(fn(x1)) || !finite(fn(x2))) continue;
+      if (Math.abs(s1 - s2) > 0.45 * (1 + Math.abs(s1) + Math.abs(s2))) {
+        var a = x1, b = x2;
+        for (var k = 0; k < 22; k++) {
+          var m = (a + b) / 2;
+          if (!derivAt(fn, m).smooth) { out.push(m); break; }
+          var sm = d1(fn, m);
+          if (!finite(sm)) { consider(m); break; }
+          if (Math.abs(sm - s1) > Math.abs(sm - s2)) b = m; else a = m;
+        }
+        consider((x1 + x2) / 2);
+      }
+    }
+    var sp = xmax - xmin;
+    return uniqueSorted(out, sp * 3e-3).map(function (x) { return snapNice(x, sp); });
+  }
+
+  /* ---------- 定积分 ---------- */
+  function integrate(fn, a, b, n) {
+    if (!finite(a) || !finite(b) || a === b) return { value: 0, abs: 0, ok: true };
+    var sign = 1;
+    if (b < a) { var t = a; a = b; b = t; sign = -1; }
+    n = n || 480;
+    if (n % 2) n++;
+    var h = (b - a) / n;
+    var sum = 0, abss = 0, miss = 0;
+    function fy(x) { var y = fn(x); return finite(y) ? y : null; }
+    var y0 = fy(a), yn = fy(b);
+    if (y0 == null || yn == null) miss++;
+    var acc = (y0 || 0) + (yn || 0);
+    for (var i = 1; i < n; i++) {
+      var y = fy(a + i * h);
+      if (y == null) { miss++; y = 0; }
+      acc += y * (i % 2 ? 4 : 2);
+      abss += Math.abs(y) * (i % 2 ? 4 : 2);
+    }
+    abss += Math.abs(y0 || 0) + Math.abs(yn || 0);
+    var val = acc * h / 3;
+    return { value: sign * val, abs: abss * h / 3, ok: miss < n * 0.05 };
+  }
+
+  /* ---------- 函数性质 ---------- */
+  function domainHints(node) {
+    var hints = [], seen = Object.create(null);
+    function add(s) { if (!seen[s]) { seen[s] = 1; hints.push(s); } }
+    if (!node) return hints;
+    walk(node, function (n) {
+      if (n.k === "call") {
+        if (n.n === "sqrt") add("根号内 ≥ 0");
+        if (n.n === "ln" || n.n === "log" || n.n === "lg" || n.n === "log10" || n.n === "lb" || n.n === "log2") add("真数 > 0");
+        if (n.n === "tan" || n.n === "sec") add("x ≠ π/2+kπ");
+        if (n.n === "cot" || n.n === "csc") add("x ≠ kπ");
+        if (n.n === "asin" || n.n === "acos" || n.n === "arcsin" || n.n === "arccos") add("反三角自变量在 [-1, 1]");
+      }
+      if (n.k === "op" && n.op === "/") add("分母 ≠ 0");
+    });
+    return hints;
+  }
+  function domainIntervals(fn, xmin, xmax, n) {
+    n = n || 500;
+    var dx = (xmax - xmin) / n, segs = [], a = null;
+    for (var i = 0; i <= n; i++) {
+      var x = xmin + dx * i, ok = finite(fn(x));
+      if (ok && a == null) a = x;
+      if (!ok && a != null) { segs.push([a, xmin + dx * (i - 1)]); a = null; }
+    }
+    if (a != null) segs.push([a, xmax]);
+    return segs;
+  }
+  function parityOf(fn, R) {
+    R = R || 4;
+    var even = 0, odd = 0, tot = 0;
+    for (var i = 1; i <= 28; i++) {
+      var x = (i / 28) * R, a = fn(x), b = fn(-x);
+      if (!finite(a) || !finite(b)) continue;
+      tot++;
+      if (almost(a, b, 1e-5)) even++;
+      if (almost(a, -b, 1e-5)) odd++;
+    }
+    if (tot < 8) return "难以判断";
+    if (even / tot > 0.9 && odd / tot > 0.9) return "既奇又偶";
+    if (even / tot > 0.9) return "偶函数";
+    if (odd / tot > 0.9) return "奇函数";
+    return "非奇非偶";
+  }
+  function periodOf(fn, node) {
+    var cands = [2 * PI, PI, PI / 2, PI / 3, 2 * PI / 3, 4 * PI, 6, 4, 2, 1];
+    function ok(T) {
+      if (!(T > 1e-8) || T > 40) return false;
+      var hit = 0, tot = 0;
+      for (var i = 0; i < 24; i++) {
+        var x = -3.2 + i * 0.37, a = fn(x), b = fn(x + T);
+        if (!finite(a) && !finite(b)) continue;
+        tot++;
+        if (finite(a) && finite(b) && almost(a, b, 1e-4)) hit++;
+      }
+      return tot >= 10 && hit / tot > 0.9;
+    }
+    cands.sort(function (a, b) { return a - b; });
+    for (var i = 0; i < cands.length; i++) if (ok(cands[i])) return cands[i];
+    return null;
+  }
+  function monoIntervals(fn, xmin, xmax) {
+    var xs = findExtrema(fn, xmin, xmax, Math.max(4, xmax - xmin), 700).map(function (p) { return p.x; });
+    xs.push(xmin, xmax);
+    xs = uniqueSorted(xs, (xmax - xmin) * 1e-5);
+    var out = [];
+    for (var i = 0; i < xs.length - 1; i++) {
+      var a = xs[i], b = xs[i + 1], m = (a + b) / 2;
+      var ya = fn(a), yb = fn(b), k = d1(fn, m);
+      if (!finite(ya) || !finite(yb)) continue;
+      var dir = almost(ya, yb, 1e-6) ? "常" : (yb > ya ? "增" : "减");
+      if (!finite(k) && dir !== "常") dir = yb > ya ? "增" : "减";
+      if (out.length && out[out.length - 1].dir === dir) out[out.length - 1].b = b;
+      else out.push({ a: a, b: b, dir: dir });
+    }
+    return out;
+  }
+  function analyzeProps(fn, node, xmin, xmax) {
+    var segs = domainIntervals(fn, xmin, xmax, 600);
+    var hints = domainHints(node);
+    var par = parityOf(fn, Math.min(6, Math.max(2, Math.abs(xmax), Math.abs(xmin))));
+    var per = periodOf(fn, node);
+    var mono = monoIntervals(fn, xmin, xmax);
+    return { segs: segs, hints: hints, parity: par, period: per, mono: mono };
+  }
+  function valueTable(fn, xs) {
+    return (xs || []).map(function (x) { return { x: x, y: fn(x) }; });
   }
 
   var API = {
@@ -992,7 +1253,15 @@
     CONST: CONST,
     FNS: FNS,
     finite: finite,
-    uniqueSorted: uniqueSorted
+    uniqueSorted: uniqueSorted,
+    derivAt: derivAt,
+    d1side: d1side,
+    findCusps: findCusps,
+    integrate: integrate,
+    analyzeProps: analyzeProps,
+    domainHints: domainHints,
+    valueTable: valueTable,
+    isCond: isCond
   };
 
   root.SX = API;

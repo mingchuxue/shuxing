@@ -1,4 +1,4 @@
-const C = 'shuxing-v1';
+const C = 'shuxing-v2';
 const CORE = [
   '.',
   'index.html',
