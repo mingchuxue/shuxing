@@ -48,7 +48,19 @@
       { n: "抛物线上方", e: "y>x^2", d: "把满足 y>x² 的平面区域涂上浅色。", v: [-4, 4] },
       { n: "绝对值求和", e: "abs(x-2)+abs(x+1)", d: "图像是折线，最低段对应各零点之间的区间。", v: [-6, 6] },
       { n: "三次函数", e: "x^3-3x", d: "在 x=±1 处取极值，适合观察导数与切线。", v: [-4, 4], deriv: true },
-      { n: "根式函数", e: "sqrt(x)", d: "定义域 x≥0，过原点且在原点处切线竖直。", v: [-2, 8] }
+      { n: "根式函数", e: "sqrt(x)", d: "定义域 x≥0，过原点且在原点处切线竖直。", v: [-2, 8] },
+      { n: "正弦与单位圆", e: "sin(x)", d: "拖动圆周上的点，观察角与正弦值一一对应。", unit: true, aspect: true, pi: true, marks: false, v: [-2.5, 7, -2.2, 2.2] }
+    ]},
+    { g: "数列", items: [
+      { n: "奇数通项", e: "2n-1", k: "seq", d: "等差数列，公差为 2，前 n 项和等于 n²。", v: [0, 14, -2, 16], nMax: 12 },
+      { n: "等比数列", e: "2^{n-1}", k: "seq", d: "首项为 1，公比为 2。", v: [0, 10, -2, 20], nMax: 8 },
+      { n: "斐波那契", e: "a_n=a_{n-1}+a_{n-2}, a_1=1, a_2=1", k: "seq", d: "每一项等于前两项之和。", v: [0, 12, -2, 16], nMax: 10 },
+      { n: "递推数列", e: "a_n=a_{n-1}+3, a_1=2", k: "seq", d: "由前一项加 3 得到后一项。", v: [0, 12, -2, 16], nMax: 10 }
+    ]},
+    { g: "向量与几何", items: [
+      { n: "平面向量", multi: ["(3,4)", "(1,2)"], k: "vec", d: "从原点画出两个向量，并标出它们按平行四边形法则得到的和。", aspect: true, v: [-2, 8, -1, 8] },
+      { n: "两点定直线", e: "A(1,1)B(5,3)", k: "seg", d: "两点确定一条直线，并标出距离与中点。", aspect: true, v: [-1, 8, -1, 6] },
+      { n: "自由向量", e: "(1,1)->(4,5)", k: "vec", d: "从一点指向另一点，坐标为终点减起点。", aspect: true, v: [-1, 7, -1, 7] }
     ]},
     { g: "圆锥曲线", items: [
       { n: "圆", e: "x^2+y^2=r^2", d: "圆心在原点，半径由滑块 r 调节。", p: { r: 3 }, k: "implicit", aspect: true },
@@ -81,6 +93,10 @@
     intA: 0,
     intB: 1,
     tanX: 1,
+    nMin: 1,
+    nMax: 12,
+    unit: false,
+    ang: Math.PI / 3,
     theme: "light",
     trace: null,
     dragging: null
@@ -103,6 +119,7 @@
     else if (kind === "implicit") { r.x = 1; r.y = 1; }
     else if (kind === "param") { r.t = 1; r.x = 1; r.y = 1; }
     else if (kind === "polar") { r.θ = 1; r.theta = 1; r.t = 1; r.r = 1; }
+    else if (kind === "seq") { r.n = 1; r.x = 1; r.A1 = 1; r.A2 = 1; r.A3 = 1; }
     return r;
   }
 
@@ -115,7 +132,20 @@
   function compileExpr(item, presetP) {
     item.error = "";
     item.fn = null; item.Fx = null; item.xt = null; item.yt = null; item.conic = null; item.holds = null; item.ineqOp = null;
+    item.seq = null; item.geom = null;
     try {
+      var geomTry = (item.kind === "vec" || item.kind === "point" || item.kind === "seg" || item.kind === "explicit" || item.kind === "implicit")
+        ? SX.parseGeom(item.src || "") : null;
+      if (geomTry && (item.kind === "vec" || item.kind === "point" || item.kind === "seg" || /[ij]/i.test(item.src || "") || /\([^)]+,[^)]+\)/.test(item.src || ""))) {
+        if (item.kind === "explicit" || item.kind === "implicit") item.kind = geomTry.kind;
+        item.geom = geomTry;
+        return item;
+      }
+      if (item.kind === "seq") {
+        item.seq = SX.parseSeq(item.src);
+        item.params = mergeParams(item.params, SX.paramsOf(item.seq.node, reservedFor("seq")), presetP);
+        return item;
+      }
       if (item.kind === "param") {
         item.nodeX = SX.parse(item.srcx);
         item.nodeY = SX.parse(item.srcy);
@@ -281,6 +311,8 @@
       drawItem(e, hexColor(e.color), i === S.sel);
     });
     if (S.integ) drawIntegral();
+    drawVecOps();
+    if (S.unit) drawUnit();
     if (S.marks) drawMarks(C);
     if (S.deriv) drawTangent(C);
     if (S.trace) drawTrace(C);
@@ -421,8 +453,150 @@
       strokePath(pts3, ySpan, color, w);
     } else if (item.kind === "ineq") {
       drawIneq(item, color, w, ySpan);
+    } else if (item.kind === "seq" && item.seq) {
+      drawSeq(item, color, sel, w);
+    } else if ((item.kind === "vec" || item.kind === "point" || item.kind === "seg") && item.geom) {
+      drawGeom(item, color, sel, w);
     }
   }
+
+  function drawSeq(item, color, sel, w) {
+    var terms = SX.seqTerms(item.seq, S.nMin, S.nMax);
+    item._terms = terms;
+    ctx.save();
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = sel ? 2 : 1.5; ctx.lineCap = "round";
+    terms.forEach(function (t) {
+      if (!SX.finite(t.y)) return;
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath(); ctx.moveTo(X(t.n), Y(0)); ctx.lineTo(X(t.n), Y(t.y)); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(X(t.n), Y(t.y), sel ? 5 : 4, 0, 2 * PI);
+      ctx.fill();
+      ctx.lineWidth = 1.4; ctx.strokeStyle = css("var(--paper)"); ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = sel ? 2 : 1.5;
+    });
+    ctx.restore();
+  }
+
+  function arrowTo(x0, y0, x1, y1, color, w) {
+    var sx0 = X(x0), sy0 = Y(y0), sx1 = X(x1), sy1 = Y(y1);
+    var ang = Math.atan2(sy1 - sy0, sx1 - sx0), L = 11;
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(sx0, sy0); ctx.lineTo(sx1, sy1); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx1, sy1);
+    ctx.lineTo(sx1 - L * Math.cos(ang - 0.38), sy1 - L * Math.sin(ang - 0.38));
+    ctx.lineTo(sx1 - L * Math.cos(ang + 0.38), sy1 - L * Math.sin(ang + 0.38));
+    ctx.closePath(); ctx.fill();
+  }
+  function drawGeom(item, color, sel, w) {
+    var g = item.geom;
+    ctx.save();
+    ctx.strokeStyle = color; ctx.fillStyle = color;
+    if (item.kind === "point") {
+      ctx.beginPath(); ctx.arc(X(g.x), Y(g.y), sel ? 5.5 : 4.5, 0, 2 * PI); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = css("var(--paper)"); ctx.stroke();
+      labGeom(g.x, g.y, g.name || "P", color, 8, -16);
+    } else if (item.kind === "vec") {
+      var x0 = g.ox, y0 = g.oy, x1 = g.ox + g.x, y1 = g.oy + g.y;
+      arrowTo(x0, y0, x1, y1, color, sel ? 2.5 : 2.1);
+      var nm = g.name || ("(" + SX.formatNum(g.x) + ", " + SX.formatNum(g.y) + ")");
+      labGeom(x1, y1, nm, color, 8, -14);
+    } else if (item.kind === "seg") {
+      var a = g.a, b = g.b, desc = SX.lineDesc(a, b);
+        ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      if (desc.typ === "vert") {
+        ctx.moveTo(X(a.x), 0); ctx.lineTo(X(a.x), H);
+      } else if (desc.typ !== "point") {
+        var k = desc.k, intc = desc.b;
+        ctx.moveTo(X(S.view.xmin), Y(k * S.view.xmin + intc));
+        ctx.lineTo(X(S.view.xmax), Y(k * S.view.xmax + intc));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.lineWidth = sel ? 2.5 : 2.1;
+      ctx.beginPath(); ctx.moveTo(X(a.x), Y(a.y)); ctx.lineTo(X(b.x), Y(b.y)); ctx.stroke();
+      function pt(p, name) {
+        ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 4.5, 0, 2 * PI); ctx.fillStyle = color; ctx.fill();
+        ctx.lineWidth = 1.4; ctx.strokeStyle = css("var(--paper)"); ctx.stroke(); ctx.strokeStyle = color;
+        labGeom(p.x, p.y, name, color, 8, -16);
+      }
+      pt(a, a.name || "A"); pt(b, b.name || "B");
+      if (S.marks) {
+        var m = SX.midpoint(a, b);
+        ctx.beginPath(); ctx.arc(X(m.x), Y(m.y), 3.5, 0, 2 * PI);
+        ctx.fillStyle = css("var(--paper)"); ctx.fill();
+        ctx.lineWidth = 1.6; ctx.strokeStyle = color; ctx.stroke();
+        labGeom(m.x, m.y, "中点", color, 8, 12);
+      }
+    }
+    ctx.restore();
+  }
+  function labGeom(x, y, text, color, dx, dy) {
+    ctx.save();
+    ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
+    var tw = ctx.measureText(text).width, lx = X(x) + (dx || 8), ly = Y(y) + (dy || -14);
+    ctx.fillStyle = css("var(--card)"); ctx.strokeStyle = css("var(--line)"); ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(lx - 4, ly - 3, tw + 8, 16, 4); else ctx.rect(lx - 4, ly - 3, tw + 8, 16);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = color || css("var(--ink)"); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(text, lx, ly);
+    ctx.restore();
+  }
+  function visibleVecs() {
+    return S.exprs.filter(function (e) { return e.on && !e.error && e.kind === "vec" && e.geom; });
+  }
+  function drawVecOps() {
+    var vs = visibleVecs();
+    if (vs.length < 2) return;
+    var a = vs[0].geom, b = vs[1].geom;
+    if (Math.abs(a.ox - b.ox) > 1e-8 || Math.abs(a.oy - b.oy) > 1e-8) return;
+    var ox = a.ox, oy = a.oy;
+    var sx = ox + a.x + b.x, sy = oy + a.y + b.y;
+    var col = css("var(--zhu)");
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = col; ctx.lineWidth = 1.3; ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(X(ox + a.x), Y(oy + a.y)); ctx.lineTo(X(sx), Y(sy));
+    ctx.moveTo(X(ox + b.x), Y(oy + b.y)); ctx.lineTo(X(sx), Y(sy));
+    ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    arrowTo(ox, oy, sx, sy, col, 2.2);
+    labGeom(sx, sy, "a+b", col, 8, -14);
+    ctx.restore();
+  }
+  function drawUnit() {
+    if (!S.unit) return;
+    var th = S.ang, c = Math.cos(th), s0 = Math.sin(th);
+    var col = css("var(--acc)"), ink = css("var(--ink)");
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.arc(X(0), Y(0), Math.abs(X(1) - X(0)), 0, 2 * PI); ctx.stroke();
+    ctx.setLineDash([3, 3]); ctx.lineWidth = 1.1; ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(c), Y(s0)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(X(c), Y(s0)); ctx.lineTo(X(c), Y(0)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(c), Y(0)); ctx.stroke();
+    var hasSin = S.exprs.some(function (e) { return e.on && e.kind === "explicit" && e.fn && /sin\s*\(/i.test(e.src); });
+    if (hasSin && SX.finite(th)) {
+      ctx.beginPath(); ctx.moveTo(X(c), Y(s0)); ctx.lineTo(X(th), Y(s0)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(th), Y(0)); ctx.lineTo(X(th), Y(s0)); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(X(th), Y(s0), 4.5, 0, 2 * PI);
+      ctx.fillStyle = css("var(--zhu)"); ctx.fill();
+      ctx.strokeStyle = css("var(--paper)"); ctx.lineWidth = 1.4; ctx.stroke();
+    } else {
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(X(c), Y(s0), 6, 0, 2 * PI); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = css("var(--paper)"); ctx.stroke();
+    labGeom(c, s0, "P", col, 10, -18);
+    labGeom(c, 0, "cos θ", col, 6, 10);
+    if (Math.abs(c) > 0.15) labGeom(0, s0, "sin θ", col, -40, -8);
+    ctx.restore();
+  }
+
 
   function drawIneq(item, color, w, ySpan) {
     ctx.save();
@@ -692,7 +866,19 @@
       if (kind === "param") tex = "x=" + (SX.latexOf(item.srcx) || item.srcx) + ",\\; y=" + (SX.latexOf(item.srcy) || item.srcy);
       else if (kind === "polar") tex = "r=" + (SX.latexOf(String(item.src).replace(/^\s*r\s*=\s*/i, "")) || item.src);
       else if (kind === "implicit" || kind === "ineq") tex = SX.latexOf(item.src) || item.src;
-      else tex = "y=" + (SX.latexOf(item.src) || item.src);
+      else if (kind === "seq") {
+        var body = (item.seq && item.seq.formula) ? item.seq.formula : String(item.src).replace(/^\s*(?:a_n|a_\{n\}|an)\s*=\s*/i, "");
+        tex = "a_n=" + (SX.latexOf(body) || body);
+      } else if (kind === "vec" && item.geom) {
+        var gv = item.geom;
+        tex = (gv.name ? "\\overrightarrow{" + gv.name + "}=" : "") + "(" + (SX.latexOf(gv.xsrc) || SX.formatNum(gv.x)) + "," + (SX.latexOf(gv.ysrc) || SX.formatNum(gv.y)) + ")";
+      } else if (kind === "point" && item.geom) {
+        var gp = item.geom;
+        tex = (gp.name || "P") + "\\left(" + (SX.latexOf(gp.xsrc) || SX.formatNum(gp.x)) + "," + (SX.latexOf(gp.ysrc) || SX.formatNum(gp.y)) + "\\right)";
+      } else if (kind === "seg" && item.geom) {
+        var A = item.geom.a, B = item.geom.b;
+        tex = (A.name || "A") + "\\left(" + SX.formatNum(A.x) + "," + SX.formatNum(A.y) + "\\right)," + (B.name || "B") + "\\left(" + SX.formatNum(B.x) + "," + SX.formatNum(B.y) + "\\right)";
+      } else tex = "y=" + (SX.latexOf(item.src) || item.src);
       return katex.renderToString(tex, { throwOnError: false, displayMode: false });
     } catch (e) { return escapeH(item.src || src); }
   }
@@ -776,7 +962,46 @@
         rows.push(["面积（绝对值）", SX.formatNum(I.abs)]);
       }
     }
-    if (e.conic && e.conic.type && e.conic.type !== "degenerate") {
+    if (e.kind === "seq" && e.seq) {
+      var terms = e._terms || SX.seqTerms(e.seq, S.nMin, S.nMax);
+      var an = SX.analyzeSeq(terms);
+      rows.push(["类型", an.type]);
+      if (an.d != null) rows.push(["公差", SX.formatNum(an.d)]);
+      if (an.r != null) rows.push(["公比", SX.formatNum(an.r)]);
+      if (SX.finite(an.sum)) rows.push(["前 " + S.nMax + " 项和 S_" + S.nMax, SX.formatNum(an.sum)]);
+    }
+    if ((e.kind === "vec" || e.kind === "point" || e.kind === "seg") && e.geom) {
+      var g = e.geom;
+      if (e.kind === "vec") {
+        rows.push(["坐标", "(" + SX.formatNum(g.x) + ", " + SX.formatNum(g.y) + ")"]);
+        rows.push(["模", SX.formatNum(SX.vecAbs(g))]);
+        rows.push(["方向角", SX.formatNum(SX.vecAng(g))]);
+        var vs = S.exprs.filter(function (it) { return it.on && !it.error && it.kind === "vec" && it.geom; });
+        if (vs.length >= 2) {
+          var u = vs[0].geom, w = vs[1].geom;
+          rows.push(["a+b", "(" + SX.formatNum(u.x + w.x) + ", " + SX.formatNum(u.y + w.y) + ")"]);
+          rows.push(["a−b", "(" + SX.formatNum(u.x - w.x) + ", " + SX.formatNum(u.y - w.y) + ")"]);
+          rows.push(["a·b", SX.formatNum(SX.vecDot(u, w))]);
+          var angv = SX.vecAngBetween(u, w);
+          if (SX.finite(angv)) rows.push(["夹角", SX.formatNum(angv)]);
+        }
+      } else if (e.kind === "point") {
+        rows.push(["坐标", "(" + SX.formatNum(g.x) + ", " + SX.formatNum(g.y) + ")"]);
+      } else if (e.kind === "seg") {
+        rows.push(["距离", SX.formatNum(SX.distPP(g.a, g.b))]);
+        var md = SX.midpoint(g.a, g.b);
+        rows.push(["中点", "(" + SX.formatNum(md.x) + ", " + SX.formatNum(md.y) + ")"]);
+        var ln = SX.lineDesc(g.a, g.b);
+        rows.push(["直线方程", ln.text]);
+        if (ln.slope != null && SX.finite(ln.slope)) rows.push(["斜率", SX.formatNum(ln.slope)]);
+      }
+    }
+    if (S.unit) {
+      rows.push(["角 θ", SX.formatNum(S.ang)]);
+      rows.push(["cos θ", SX.formatNum(Math.cos(S.ang))]);
+      rows.push(["sin θ", SX.formatNum(Math.sin(S.ang))]);
+    }
+        if (e.conic && e.conic.type && e.conic.type !== "degenerate") {
       var c = e.conic;
       var typeName = { circle: "圆", ellipse: "椭圆", hyperbola: "双曲线", parabola: "抛物线" }[c.type] || c.type;
       rows.push(["类型", typeName]);
@@ -803,6 +1028,12 @@
         html += '<div class="intedit">积分区间 <input id="inta" type="text" value="' + escapeH(SX.formatNum(S.intA)) + '"> 到 <input id="intb" type="text" value="' + escapeH(SX.formatNum(S.intB)) + '"></div>';
       }
     }
+    if (e.kind === "seq") {
+      var terms2 = e._terms || SX.seqTerms(e.seq, S.nMin, S.nMax);
+      var show = terms2.slice(0, 16);
+      html += "<h3>取值</h3><table class=\"vtab\"><tr><th>n</th>" + show.map(function (t) { return "<th>" + t.n + "</th>"; }).join("") + "</tr><tr><td>a_n</td>" + show.map(function (t) { return "<td>" + escapeH(SX.formatNum(t.y)) + "</td>"; }).join("") + "</tr></table>";
+      html += '<div class="nedit">项数 n 从 <input id="nmin" type="text" value="' + escapeH(String(S.nMin)) + '"> 到 <input id="nmax" type="text" value="' + escapeH(String(S.nMax)) + '"></div>';
+    }
     el.innerHTML = html;
     if (S.integ && e.fn) {
       function readBound(id, def) {
@@ -818,12 +1049,29 @@
         inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") ev.target.blur(); });
       });
     }
+    if (e.kind === "seq") {
+      function readN(id, def) {
+        var v = parseInt(($("#"+id) && $("#"+id).value) || "", 10);
+        return isFinite(v) ? v : def;
+      }
+      ["nmin","nmax"].forEach(function (id) {
+        var inp = $("#"+id); if (!inp) return;
+        inp.addEventListener("change", function () {
+          var a = readN("nmin", S.nMin), b = readN("nmax", S.nMax);
+          if (a > b) { var t = a; a = b; b = t; }
+          S.nMin = a; S.nMax = b;
+          if (S.nMax - S.nMin > 80) S.nMax = S.nMin + 80;
+          draw(); renderInfo(); persist();
+        });
+        inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") ev.target.blur(); });
+      });
+    }
   }
 
   function renderTools() {
     var items = [
       ["reset", "复位", false], ["fit", "适应", false], ["aspect", "等比例", S.aspect],
-      ["pi", "π 刻度", S.pi], ["grid", "网格", S.grid], ["marks", "标注", S.marks], ["deriv", "导数", S.deriv], ["integ", "积分", S.integ]
+      ["pi", "π 刻度", S.pi], ["grid", "网格", S.grid], ["marks", "标注", S.marks], ["deriv", "导数", S.deriv], ["integ", "积分", S.integ], ["unit", "单位圆", S.unit]
     ];
     $("#tools").innerHTML = items.map(function (it) {
       return '<button type="button" data-t="' + it[0] + '" class="' + (it[2] ? "on" : "") + '">' + it[1] + "</button>";
@@ -848,9 +1096,11 @@
     var param = m === "param";
     $("#paramIn").hidden = !param;
     $("#fin").style.display = param ? "none" : "flex";
-    $("#exprPre").textContent = m === "polar" ? "r =" : m === "implicit" ? "" : "y =";
-    var ph = { explicit: "sin(x) 或 {x^2, x<0; 2x, x>=0}", implicit: "x^2/4+y^2/9=1", polar: "2*cos(θ)", param: "" };
+    var pre = { polar: "r =", implicit: "", seq: "a_n =", vec: "", explicit: "y =", param: "y =" };
+    $("#exprPre").textContent = pre[m] != null ? pre[m] : "y =";
+    var ph = { explicit: "sin(x) 或 {x^2, x<0; 2x, x>=0}", implicit: "x^2/4+y^2/9=1", polar: "2*cos(θ)", param: "", seq: "2n-1 或 a_n=a_{n-1}+2, a_1=1", vec: "(3,4) 或 A(1,2)B(5,3)" };
     $("#exprIn").placeholder = ph[m] || "";
+    renderChips();
     if (window.Motion) Motion.refresh();
   }
 
@@ -872,7 +1122,7 @@
         return { k: e.kind, s: e.src, x: e.srcx, y: e.srcy, on: e.on, c: e.color, p: paramVals(e), t: e.trange, r: e.prange };
       }),
       v: [S.view.xmin, S.view.xmax, S.view.ymin, S.view.ymax],
-      o: { a: S.aspect, pi: S.pi, g: S.grid, m: S.marks, d: S.deriv, integ: S.integ, ia: S.intA, ib: S.intB, tx: S.tanX, theme: S.theme, sel: S.sel, mode: S.mode }
+      o: { a: S.aspect, pi: S.pi, g: S.grid, m: S.marks, d: S.deriv, integ: S.integ, ia: S.intA, ib: S.intB, tx: S.tanX, theme: S.theme, sel: S.sel, mode: S.mode, nm: S.nMin, nM: S.nMax, unit: S.unit, ang: S.ang }
     };
   }
   function loadSnap(o) {
@@ -894,6 +1144,10 @@
     if (opt.ia != null) S.intA = +opt.ia;
     if (opt.ib != null) S.intB = +opt.ib;
     if (opt.tx != null) S.tanX = +opt.tx;
+    if (opt.nm != null) S.nMin = +opt.nm;
+    if (opt.nM != null) S.nMax = +opt.nM;
+    if (opt.unit != null) S.unit = !!opt.unit;
+    if (opt.ang != null) S.ang = +opt.ang;
     if (opt.theme) setTheme(opt.theme, true);
     if (opt.mode) setMode(opt.mode);
     if (opt.sel != null && opt.sel < S.exprs.length) S.sel = opt.sel;
@@ -920,10 +1174,16 @@
       var s = $("#exprIn").value.trim();
       if (!s) return;
       var kind = S.mode;
-      var det = SX.detectKind(S.mode === "explicit" && !/^\s*y\s*=/i.test(s) ? "y=" + s : s);
-      if (det.kind === "param" || det.kind === "polar" || det.kind === "implicit" || det.kind === "ineq") kind = det.kind;
-      if (kind === "param") addExpr({ kind: "param", srcx: det.rawx, srcy: det.rawy });
-      else addExpr({ kind: kind, src: det.raw || s });
+      var g = SX.parseGeom(s);
+      if (S.mode === "seq") kind = "seq";
+      else if (g && (S.mode === "vec" || S.mode === "explicit" || S.mode === "implicit")) kind = g.kind;
+      else {
+        var det = SX.detectKind(S.mode === "explicit" && !/^\s*y\s*=/i.test(s) ? "y=" + s : s);
+        if (det.kind === "param" || det.kind === "polar" || det.kind === "implicit" || det.kind === "ineq") kind = det.kind;
+        if (kind === "param") { addExpr({ kind: "param", srcx: det.rawx, srcy: det.rawy }); afterChange(); return; }
+        s = det.raw || s;
+      }
+      addExpr({ kind: kind, src: s });
       $("#exprIn").value = "";
     }
     afterChange();
@@ -950,6 +1210,11 @@
     }
     if (it.pi != null) S.pi = !!it.pi;
     if (it.deriv) S.deriv = true;
+    if (it.nMax) S.nMax = it.nMax;
+    if (it.k === "seq") setMode("seq");
+    if (it.k === "vec" || it.k === "seg" || it.k === "point") setMode("vec");
+    if (it.marks != null) S.marks = !!it.marks;
+    if (it.unit) { S.unit = true; S.ang = PI / 3; if (it.aspect == null) S.aspect = true; }
     if (it.aspect != null) { S.aspect = !!it.aspect; if (S.aspect) applyAspect(); }
     closeGallery();
     renderTools();
@@ -965,8 +1230,30 @@
         var pts = SX.sampleFn(e.fn, S.view.xmin, S.view.xmax, 400);
         pts.forEach(function (p) { if (SX.finite(p.y) && Math.abs(p.y) < 1e6) { xs.push(p.x); ys.push(p.y); } });
       }
+      if (e.kind === "seq" && e.seq) {
+        SX.seqTerms(e.seq, S.nMin, S.nMax).forEach(function (t) {
+          xs.push(t.n);
+          if (SX.finite(t.y)) ys.push(t.y);
+        });
+      }
+      if (e.geom) {
+        if (e.kind === "point") { xs.push(e.geom.x); ys.push(e.geom.y); }
+        else if (e.kind === "vec") {
+          xs.push(e.geom.ox, e.geom.ox + e.geom.x);
+          ys.push(e.geom.oy, e.geom.oy + e.geom.y);
+        } else if (e.kind === "seg") {
+          xs.push(e.geom.a.x, e.geom.b.x); ys.push(e.geom.a.y, e.geom.b.y);
+        }
+      }
     });
-    if (!ys.length) { S.view = { xmin: -8, xmax: 8, ymin: -4.5, ymax: 4.5 }; if (S.aspect) applyAspect(); return; }
+    if (!ys.length && !xs.length) { S.view = { xmin: -8, xmax: 8, ymin: -4.5, ymax: 4.5 }; if (S.aspect) applyAspect(); return; }
+    if (xs.length) {
+      var minx = Math.min.apply(null, xs), maxx = Math.max.apply(null, xs);
+      if (minx === maxx) { minx -= 1; maxx += 1; }
+      var padx = (maxx - minx) * 0.16 || 1;
+      S.view.xmin = minx - padx; S.view.xmax = maxx + padx;
+    }
+    if (!ys.length) { ys.push(-1, 1); }
     var miny = Math.min.apply(null, ys), maxy = Math.max.apply(null, ys);
     if (miny === maxy) { miny -= 1; maxy += 1; }
     var pad = (maxy - miny) * 0.12 || 1;
@@ -1023,6 +1310,17 @@
       var da = Math.abs(p.x - X(S.intA)), db = Math.abs(p.x - X(S.intB));
       if (da < 12 || db < 12) { S.dragging = da <= db ? "inta" : "intb"; return; }
     }
+    if (S.unit) {
+      var px = X(Math.cos(S.ang)), py = Y(Math.sin(S.ang));
+      var rpx = Math.abs(X(1) - X(0));
+      var pr = Math.hypot(p.x - X(0), p.y - Y(0));
+      if (Math.hypot(p.x - px, p.y - py) < 18 || (Math.abs(pr - rpx) < 14 && pr > 12)) {
+        S.dragging = "ang";
+        S.ang = Math.atan2(Wy(p.y), Wx(p.x));
+        draw(); renderInfo();
+        return;
+      }
+    }
     if (S.deriv && S._tan) {
       if (Math.hypot(p.x - X(S._tan.x), p.y - Y(S._tan.y)) < 16) {
         S.dragging = "tan"; return;
@@ -1038,6 +1336,10 @@
     }
     var prev = pointers.get(e.pointerId);
     pointers.set(e.pointerId, p);
+    if (S.dragging === "ang") {
+      S.ang = Math.atan2(Wy(p.y), Wx(p.x));
+      draw(); renderInfo(); return;
+    }
     if (S.dragging === "tan") {
       S.tanX = Wx(p.x); draw(); renderInfo(); return;
     }
@@ -1157,6 +1459,9 @@
           S.intA = S.view.xmin + span * 0.25; S.intB = S.view.xmin + span * 0.75;
         }
       }
+    } else if (t === "unit") {
+      S.unit = !S.unit;
+      if (S.unit && !S.aspect) { S.aspect = true; applyAspect(); }
     }
     renderTools(); draw(); renderInfo(); persist();
   });
@@ -1166,7 +1471,9 @@
     explicit: ["sin", "cos", "tan", "ln", "log", "sqrt", "abs", "^", "π", "{ }", "e"],
     implicit: ["x^2", "y^2", "^", "/", "π", "=", "<", ">"],
     param: ["cos(t)", "sin(t)", "t", "π"],
-    polar: ["cos(θ)", "sin(θ)", "θ", "π"]
+    polar: ["cos(θ)", "sin(θ)", "θ", "π"],
+    seq: ["n", "a_n=", "a_{n-1}", "a_1=", "^", "+", "2n-1"],
+    vec: ["(3,4)", "i", "j", "A(", "->"]
   };
   function renderChips() {
     var arr = CHIPS[S.mode] || CHIPS.explicit;
@@ -1312,7 +1619,8 @@
       Motion.enter($(".stage"));
     }
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      navigator.serviceWorker.register("sw.js");
+      var swp = navigator.serviceWorker.register("sw.js");
+      if (swp && swp.catch) swp.catch(function () {});
     }
   }
   boot();

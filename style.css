@@ -36,7 +36,7 @@ a{color:inherit;text-decoration:none}
 .brand small{display:block;color:var(--ink3);font-size:11px;letter-spacing:3px;margin-top:2px}
 .logo{color:var(--acc);display:grid}
 .modes{display:flex;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;flex:none}
-.modes button{border:0;background:transparent;padding:7px 13px;border-radius:9px;font-size:13px;color:var(--ink2)}
+.modes button{border:0;background:transparent;padding:7px 10px;border-radius:9px;font-size:13px;color:var(--ink2)}
 .modes button.on{background:var(--card2);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
 #modes>.mo-ind{background:var(--card2);box-shadow:0 0 0 1px var(--line);border-radius:9px}
 #modes.mo-g button.on{background:transparent;box-shadow:none}
@@ -151,3 +151,10 @@ a{color:inherit;text-decoration:none}
 .info .intedit input:focus{border-color:var(--acc)}
 
 #exprIn::placeholder{font-size:12.5px}
+
+.info .nedit{margin-top:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
+.info .nedit input{width:56px;border:1px solid var(--line);background:var(--card2);border-radius:8px;padding:5px 7px;font-family:var(--mono);font-size:12px;color:var(--ink);outline:none}
+.info .nedit input:focus{border-color:var(--acc)}
+@media (max-width:860px){
+  .modes button{padding:7px 6px;font-size:12px}
+}

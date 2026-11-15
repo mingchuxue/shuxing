@@ -939,6 +939,15 @@
   /* ---------- 格式化 ---------- */
   function almost(a, b, t) { return Math.abs(a - b) <= (t || 1e-8) * (1 + Math.abs(b)); }
 
+  function formatSurd(n, den, sign) {
+    var c = 1, m = n;
+    for (var k = 2; k * k <= m; k++) while (m % (k * k) === 0) { c *= k; m /= k * k; }
+    var g = gcd(c, den); c /= g; den /= g;
+    var core = (c === 1 ? "" : String(c)) + (m === 1 ? "" : "√" + m);
+    if (m === 1) core = String(c);
+    if (den !== 1) core = (c === 1 && m !== 1) ? "√" + m + "/" + den : core + "/" + den;
+    return (sign < 0 ? "-" : "") + core;
+  }
   function formatNum(v, prec) {
     if (!finite(v)) return "—";
     if (almost(v, 0, 1e-10)) return "0";
@@ -958,8 +967,10 @@
     for (var n = 2; n <= 200; n++) {
       var s = Math.sqrt(n);
       if (s === Math.round(s)) continue;
-      if (almost(v, s, 1e-8)) return "√" + n;
-      if (almost(v, -s, 1e-8)) return "-√" + n;
+      for (var den = 1; den <= 8; den++) {
+        if (almost(v, s / den, 1e-8)) return formatSurd(n, den, 1);
+        if (almost(v, -s / den, 1e-8)) return formatSurd(n, den, -1);
+      }
     }
     for (var den = 2; den <= 16; den++) {
       var num = Math.round(v * den);
@@ -1226,6 +1237,174 @@
     return (xs || []).map(function (x) { return { x: x, y: fn(x) }; });
   }
 
+
+  /* ---------- 数列 ---------- */
+  function normMathText(s) {
+    return String(s).trim()
+      .replace(/，/g, ",").replace(/；/g, ";").replace(/＝/g, "=")
+      .replace(/－/g, "-").replace(/—/g, "-").replace(/–/g, "-")
+      .replace(/×/g, "*").replace(/｛/g, "{").replace(/｝/g, "}");
+  }
+  function parseSeq(src) {
+    var text = normMathText(src);
+    if (!text) throw new Error("请输入通项或递推式");
+    var rawParts = text.split(";").map(function (p) { return p.trim(); }).filter(Boolean);
+    var clauses = [];
+    rawParts.forEach(function (p) {
+      p.split(/,(?=\s*a_?\{?\d+)/i).forEach(function (c) { c = c.trim(); if (c) clauses.push(c); });
+    });
+    var initSrc = {}, formula = null;
+    clauses.forEach(function (c) {
+      var mInit = c.match(/^a_?\{?(\d+)\}?\s*=\s*(.+)$/i);
+      var mTerm = c.match(/^(?:a_n|a_\{n\}|a\(n\)|an)\s*=\s*(.+)$/i);
+      if (mInit) initSrc[+mInit[1]] = mInit[2];
+      else if (mTerm) formula = mTerm[1];
+      else if (!formula) formula = c;
+    });
+    if (!formula) throw new Error("请给出通项或递推关系");
+    var recKs = [], rec = false;
+    var body = formula
+      .replace(/a_\{n\s*-\s*(\d+)\}/gi, function (_, k) { recKs.push(+k); return "A" + k; })
+      .replace(/a\(n\s*-\s*(\d+)\)/gi, function (_, k) { recKs.push(+k); return "A" + k; });
+    recKs = uniqueSorted(recKs, 0);
+    rec = recKs.length > 0;
+    var node = parse(body);
+    var init = {}, initNodes = {};
+    Object.keys(initSrc).forEach(function (k) {
+      var n = parse(initSrc[k]);
+      initNodes[+k] = n;
+      var v = evalNode(n, {});
+      if (!finite(v)) throw new Error("初值 a_" + k + " 无法计算");
+      init[+k] = v;
+    });
+    if (rec) {
+      recKs.forEach(function (k) {
+        if (init[k] == null && init[1] == null) throw new Error("递推需要给出初值，例如 a_1=1");
+      });
+    }
+    return { rec: rec, recKs: recKs, node: node, formula: formula, init: init, initSrc: initSrc, initNodes: initNodes, src: text };
+  }
+  function seqTermAt(spec, n, mem) {
+    mem = mem || {};
+    if (mem[n] != null && finite(mem[n])) return mem[n];
+    if (!spec.rec) {
+      var y = evalNode(spec.node, { n: n, x: n });
+      mem[n] = y;
+      return y;
+    }
+    if (spec.init[n] != null) { mem[n] = spec.init[n]; return mem[n]; }
+    var env = { n: n, x: n }, ok = true;
+    for (var i = 0; i < spec.recKs.length; i++) {
+      var k = spec.recKs[i], prev = n - k;
+      var pv = seqTermAt(spec, prev, mem);
+      if (!finite(pv)) { ok = false; break; }
+      env["A" + k] = pv;
+    }
+    var v = ok ? evalNode(spec.node, env) : NaN;
+    mem[n] = v;
+    return v;
+  }
+  function seqTerms(spec, n1, n2) {
+    n1 = Math.round(n1); n2 = Math.round(n2);
+    if (n2 < n1) { var t = n1; n1 = n2; n2 = t; }
+    if (n2 - n1 > 80) n2 = n1 + 80;
+    var mem = {}, out = [];
+    Object.keys(spec.init || {}).forEach(function (k) { mem[+k] = spec.init[k]; });
+    for (var n = n1; n <= n2; n++) out.push({ n: n, y: seqTermAt(spec, n, mem) });
+    return out;
+  }
+  function analyzeSeq(terms) {
+    var ys = terms.filter(function (t) { return finite(t.y); });
+    var info = { type: "一般数列", d: null, r: null, sum: NaN, ok: ys.length >= 1 };
+    if (!ys.length) return info;
+    var sum = 0;
+    ys.forEach(function (t) { sum += t.y; });
+    info.sum = sum;
+    if (ys.length >= 3) {
+      var ds = [], rs = [], rOk = true;
+      for (var i = 1; i < ys.length; i++) {
+        ds.push(ys[i].y - ys[i - 1].y);
+        if (Math.abs(ys[i - 1].y) < 1e-12) rOk = false;
+        else rs.push(ys[i].y / ys[i - 1].y);
+      }
+      var d0 = ds[0], dEq = ds.every(function (d) { return almost(d, d0, 1e-7); });
+      var r0 = rs[0], rEq = rOk && rs.length === ds.length && rs.every(function (r) { return almost(r, r0, 1e-7); });
+      if (dEq) { info.type = "等差数列"; info.d = d0; }
+      else if (rEq) { info.type = "等比数列"; info.r = r0; }
+    }
+    return info;
+  }
+
+  /* ---------- 向量与几何 ---------- */
+  function evXY(sx, sy) {
+    var x = evalNode(parse(sx), {}), y = evalNode(parse(sy), {});
+    if (!finite(x) || !finite(y)) throw new Error("坐标无法计算");
+    return { x: x, y: y, xsrc: String(sx).trim(), ysrc: String(sy).trim() };
+  }
+  function parseIJ(s) {
+    var t = s.replace(/\s+/g, "");
+    if (!/[ij]/i.test(t)) return null;
+    if (!/^[+\-0-9.*/^()πpieisqrtj]+$/i.test(t)) return null;
+    var xPart = t.match(/(^|[+-])([^+-]*?)i/i);
+    var yPart = t.match(/(^|[+-])([^+-]*?)j/i);
+    if (!xPart && !yPart) return null;
+    function coeff(m) {
+      if (!m) return 0;
+      var sign = m[1] === "-" ? -1 : 1;
+      var b = m[2];
+      if (b === "" || b === "*") return sign;
+      return sign * evalNode(parse(b), {});
+    }
+    var x = coeff(xPart), y = coeff(yPart);
+    if (!finite(x) || !finite(y)) return null;
+    return { x: x, y: y, xsrc: formatNum(x), ysrc: formatNum(y) };
+  }
+  function parseGeom(src) {
+    var s = normMathText(src).replace(/→/g, "->").replace(/->[>]*/g, "->");
+    if (!s) return null;
+    var ij = parseIJ(s);
+    if (ij) return { kind: "vec", name: "", ox: 0, oy: 0, x: ij.x, y: ij.y, xsrc: ij.xsrc, ysrc: ij.ysrc, oxsrc: "0", oysrc: "0" };
+    if (!/^(?:[A-Za-z\u4e00-\u9fff]\s*)?\([^,()]+,[^,()]+\)(?:\s*(?:->|-|,)?\s*(?:[A-Za-z\u4e00-\u9fff]\s*)?\([^,()]+,[^,()]+\))?$/.test(s.replace(/\s+/g, ""))) return null;
+    var pts = [], re = /(?:([A-Za-z]|[\u4e00-\u9fff])\s*)?\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)/g, m;
+    while ((m = re.exec(s))) pts.push({ name: m[1] || "", xsrc: m[2].trim(), ysrc: m[3].trim() });
+    if (!pts.length) return null;
+    var coords = pts.map(function (p) {
+      var c = evXY(p.xsrc, p.ysrc);
+      c.name = p.name;
+      return c;
+    });
+    if (coords.length >= 2) {
+      var A = coords[0], B = coords[1];
+      if (s.indexOf("->") >= 0) {
+        return { kind: "vec", name: (A.name && B.name) ? A.name + B.name : "", ox: A.x, oy: A.y, x: B.x - A.x, y: B.y - A.y, xsrc: formatNum(B.x - A.x), ysrc: formatNum(B.y - A.y), oxsrc: A.xsrc, oysrc: A.ysrc, from: A, to: B };
+      }
+      return { kind: "seg", name: (A.name || "A") + (B.name || "B"), a: A, b: B };
+    }
+    var P = coords[0];
+    if (P.name) return { kind: "point", name: P.name, x: P.x, y: P.y, xsrc: P.xsrc, ysrc: P.ysrc };
+    return { kind: "vec", name: "", ox: 0, oy: 0, x: P.x, y: P.y, xsrc: P.xsrc, ysrc: P.ysrc, oxsrc: "0", oysrc: "0" };
+  }
+  function vecAbs(v) { return Math.hypot(v.x, v.y); }
+  function vecDot(a, b) { return a.x * b.x + a.y * b.y; }
+  function vecAng(v) { return Math.atan2(v.y, v.x); }
+  function vecAngBetween(a, b) {
+    var na = vecAbs(a), nb = vecAbs(b);
+    if (na < 1e-12 || nb < 1e-12) return NaN;
+    var c = vecDot(a, b) / (na * nb);
+    if (c > 1) c = 1; if (c < -1) c = -1;
+    return Math.acos(c);
+  }
+  function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+  function distPP(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+  function lineDesc(a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    if (almost(dx, 0, 1e-10) && almost(dy, 0, 1e-10)) return { typ: "point", text: "两点重合" };
+    if (almost(dx, 0, 1e-10)) return { typ: "vert", k: Infinity, text: "x = " + formatNum(a.x), slope: null };
+    var k = dy / dx, intc = a.y - k * a.x;
+    var text = "y = " + formatNum(k) + "x" + (almost(intc, 0, 1e-10) ? "" : ((intc >= 0 ? " + " : " − ") + formatNum(Math.abs(intc))));
+    return { typ: "oblique", k: k, b: intc, text: text, slope: k };
+  }
+
   var API = {
     parse: parse,
     compile: compile,
@@ -1261,7 +1440,20 @@
     analyzeProps: analyzeProps,
     domainHints: domainHints,
     valueTable: valueTable,
-    isCond: isCond
+    isCond: isCond,
+    parseSeq: parseSeq,
+    seqTerms: seqTerms,
+    seqTermAt: seqTermAt,
+    analyzeSeq: analyzeSeq,
+    parseGeom: parseGeom,
+    vecAbs: vecAbs,
+    vecDot: vecDot,
+    vecAng: vecAng,
+    vecAngBetween: vecAngBetween,
+    midpoint: midpoint,
+    distPP: distPP,
+    lineDesc: lineDesc,
+    normMathText: normMathText
   };
 
   root.SX = API;
